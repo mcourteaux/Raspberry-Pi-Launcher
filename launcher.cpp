@@ -127,6 +127,8 @@ int main(int argc, char* argv[]) {
         // 4. Load Resources (Icons and Text Textures)
         std::vector<std::unique_ptr<MenuItem>> menu_items;
         SDL_Color text_color = {255, 255, 255, 255}; // White
+        SDL_Texture *background = IMG_LoadTexture(renderer, "bg.png");
+        SDL_SetTextureScaleMode(background, SDL_SCALEMODE_LINEAR);
 
         for (const auto& app : apps) {
             auto item = std::make_unique<MenuItem>();
@@ -229,7 +231,7 @@ int main(int argc, char* argv[]) {
                 } else if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
                     if (event.button.button == SDL_BUTTON_LEFT) {
                         running = false;
-                    } else if (event.button.button = SDL_BUTTON_RIGHT) {
+                    } else if (event.button.button == SDL_BUTTON_RIGHT) {
                         selected_app_index = -1;
                         running = false;
                         loop = false;
@@ -279,6 +281,8 @@ int main(int argc, char* argv[]) {
             // --- Drawing ---
             SDL_SetRenderDrawColor(renderer, 20, 20, 35, 255); // Dark blue background
             SDL_RenderClear(renderer);
+            SDL_FRect fullscreen_rect { 0, 0, float(screen_w), float(screen_h) };
+            SDL_RenderTexture(renderer, background, NULL, &fullscreen_rect);
 
             int current_x = start_x;
             for (int i = 0; i < menu_items.size(); ++i) {

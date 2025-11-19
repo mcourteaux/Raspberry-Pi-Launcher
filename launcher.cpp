@@ -5,27 +5,41 @@
 #include <SDL3_ttf/SDL_ttf.h>
 
 #include <iostream>
+#include <fstream>
 #include <vector>
 #include <string>
 #include <cstdlib>
 #include <memory>
+#include <filesystem>
+#include <unistd.h>
+
 
 // ===================================================================
 // Hardcoded App List with Icons
 // ===================================================================
 struct App {
     std::string name;
-    std::string command;
     std::string icon_path; // Path to the icon file (e.g., "kodi.png")
+    struct Variant {
+        std::string command;
+        std::string variant_name;
+    };
+    std::vector<Variant> variants;
 };
 
-const std::vector<App> apps = {
+
+std::vector<App> apps;
+/*
+= {
     {"Kodi", "kodi-standalone", "kodi.png"},
-    {"Moonlight", "/home/martijn/moonlight-qt/app/moonlight", "moonlight.png"},
+    {"Moonlight", "QT_SCALE_FACTOR=3 /home/martijn/moonlight-qt/app/moonlight", "moonlight.png"},
+    {"Moonlight\n(Local Mesa Debug)", "QT_SCALE_FACTOR=3 meson devenv -C /home/martijn/mesa/build /home/martijn/moonlight-qt/app/moonlight", "moonlight.png"},
+    {"Moonlight\n(Local Mesa Fast)", "QT_SCALE_FACTOR=3 meson devenv -C /home/martijn/mesa/build_rel /home/martijn/moonlight-qt/app/moonlight", "moonlight.png"},
     {"Sway", "sway", "sway.svg"},
-    {"Shutdown", "shutdown -P 0", "shutdown.png"},
-    {"Reboot", "reboot", "reboot.png"},
+    {"Shutdown", "sudo shutdown -P 0", "shutdown.png"},
+    {"Reboot", "sudo reboot", "reboot.png"},
 };
+*/
 
 // ===================================================================
 // Helper Struct for Rendering
@@ -37,6 +51,13 @@ struct MenuItem {
     SDL_Texture* text_texture = nullptr;
     int text_width = 0;
     int text_height = 0;
+
+    struct Variant {
+        int text_width = 0;
+        int text_height = 0;
+        SDL_Texture* text_texture = nullptr;
+    };
+    std::vector<Variant> variants;
 
     // Destructor to automatically clean up textures
     ~MenuItem() {
@@ -53,6 +74,35 @@ struct MenuItem {
 // Main Application
 // ===================================================================
 int main(int argc, char* argv[]) {
+    std::filesystem::current_path(std::filesystem::path(argv[0]).parent_path());
+
+    // Load the config file.
+    std::ifstream conf("apps.conf");
+    std::string line;
+    apps.clear();
+    while (!conf.eof()) {
+        App app;
+        std::getline(conf, app.name);
+        std::getline(conf, app.icon_path);
+        while (true) {
+            std::getline(conf, line);
+            if (line.empty() || conf.eof() || conf.bad()) {
+                // Seperator, new app!
+                apps.emplace_back(std::move(app));
+                break;
+            } else {
+                // Variant name
+                App::Variant v;
+                v.variant_name = line;
+                std::getline(conf, v.command);
+                std::cout << "Parse variant '" << v.variant_name << "' with command: " << v.command << std::endl;
+                app.variants.emplace_back(std::move(v));
+            }
+        }
+    }
+
+
+
     bool loop = true;
     while (loop) {
         // 1. Initialize SDL and its subsystems
@@ -111,7 +161,7 @@ int main(int argc, char* argv[]) {
         };
 
         for (const auto& path : font_paths) {
-            font = TTF_OpenFont(path, 48); // Load a 28pt font
+            font = TTF_OpenFont(path, 48);
             if (font) {
                 std::cout << "Loaded font: " << path << std::endl;
                 break;
@@ -124,11 +174,18 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
+        // --- Layout constants ---
+        const int ICON_BASE_SIZE = 256;
+        const int ICON_SPACING = 120;
+        const float SELECTED_SCALE = 1.3f;
+        const int TEXT_Y_OFFSET = 220;
+
         // 4. Load Resources (Icons and Text Textures)
         std::vector<std::unique_ptr<MenuItem>> menu_items;
         SDL_Color text_color = {255, 255, 255, 255}; // White
         SDL_Texture *background = IMG_LoadTexture(renderer, "bg.png");
         SDL_SetTextureScaleMode(background, SDL_SCALEMODE_LINEAR);
+        TTF_SetFontWrapAlignment(font, TTF_HORIZONTAL_ALIGN_CENTER);
 
         for (const auto& app : apps) {
             auto item = std::make_unique<MenuItem>();
@@ -141,7 +198,10 @@ int main(int argc, char* argv[]) {
             }
 
             // Create Text Texture
-            SDL_Surface* text_surface = TTF_RenderText_Blended(font, app.name.c_str(), app.name.length(), text_color);
+            SDL_Surface* text_surface = TTF_RenderText_Blended_Wrapped(
+                    font, app.name.c_str(), app.name.length(),
+                    text_color, int(ICON_BASE_SIZE * 1.2)
+            );
             if (text_surface) {
                 item->text_texture = SDL_CreateTextureFromSurface(renderer, text_surface);
                 item->text_width = text_surface->w;
@@ -149,6 +209,19 @@ int main(int argc, char* argv[]) {
                 SDL_DestroySurface(text_surface);
             } else {
                  std::cerr << "Warning: Could not render text for " << app.name << ": " << SDL_GetError() << std::endl;
+            }
+
+            for (size_t vi = 0; vi < app.variants.size(); ++vi) {
+                const std::string &vname = app.variants[vi].variant_name;
+                MenuItem::Variant v;
+                SDL_Surface* text_surface = TTF_RenderText_Blended_Wrapped(
+                        font, vname.c_str(), vname.length(),
+                        text_color, int(ICON_BASE_SIZE * 1.2)
+                );
+                v.text_texture = SDL_CreateTextureFromSurface(renderer, text_surface);
+                v.text_width = text_surface->w;
+                v.text_height = text_surface->h;
+                item->variants.push_back(v);
             }
 
             menu_items.push_back(std::move(item));
@@ -176,14 +249,11 @@ int main(int argc, char* argv[]) {
         // 5. Main Loop
         bool running = true;
         int selected_app_index = 0;
+        int selected_app_variant = 0;
+        bool selecting_variant = 0;
         SDL_Event event;
         float scroll_accum = 0.0f;
 
-        // --- Layout constants ---
-        const int ICON_BASE_SIZE = 256;
-        const int ICON_SPACING = 120;
-        const float SELECTED_SCALE = 1.3f;
-        const int TEXT_Y_OFFSET = 220;
 
         // Calculate total width for centering
         const int total_width = (apps.size() * ICON_BASE_SIZE) + ((apps.size() - 1) * ICON_SPACING);
@@ -328,7 +398,8 @@ int main(int argc, char* argv[]) {
         // 6. Cleanup SDL resources *before* launching the external app
         std::string command_to_run = "";
         if (selected_app_index >= 0 && selected_app_index < apps.size()) {
-            command_to_run = apps[selected_app_index].command;
+            App &app = apps[selected_app_index];
+            command_to_run = app.variants[selected_app_variant].command;
         } else {
             loop = false;
         }

@@ -1,0 +1,10 @@
+[Unit]
+Description=Graphical Launcher for Raspberry Pi
+After=multi-user.target
+
+[Service]
+Type=idle
+ExecStart=/home/martijn/Raspberry-Pi-Launcher/launcher
+
+[Install]
+WantedBy=multi-user.target

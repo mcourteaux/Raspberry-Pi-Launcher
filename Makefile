@@ -6,3 +6,8 @@ launcher: launcher.cpp
 sudoers:
 	echo "$(whoami) ALL=NOPASSWD: /sbin/reboot, /sbin/shutdown" > /etc/sudoers.d/010_rpi-launcher
 
+systemd-service:
+	cp systemd.service /lib/systemd/system/rpi-launcher.service
+	systemctl daemon-reload
+	systemctl enable rpi-launcher.service
+

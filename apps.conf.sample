@@ -9,11 +9,12 @@ System Mesa
 QT_SCALE_FACTOR=3 /home/martijn/moonlight-qt/app/moonlight
 Local Mesa Debug
 QT_SCALE_FACTOR=3 meson devenv -C /home/martijn/mesa/build /home/martijn/moonlight-qt/app/moonlight
-Local Mesa Debug
-QT_SCALE_FACTOR=3 meson devenv -C /home/martijn/mesa/build /home/martijn/moonlight-qt/app/moonlight
+Local Mesa Release
+QT_SCALE_FACTOR=3 meson devenv -C /home/martijn/mesa/build_release /home/martijn/moonlight-qt/app/moonlight
 
 Sway
-sway.svg
+sway.png
+Sway
 sway
 
 Shutdown

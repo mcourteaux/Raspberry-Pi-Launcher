@@ -29,17 +29,6 @@ struct App {
 
 
 std::vector<App> apps;
-/*
-= {
-    {"Kodi", "kodi-standalone", "kodi.png"},
-    {"Moonlight", "QT_SCALE_FACTOR=3 /home/martijn/moonlight-qt/app/moonlight", "moonlight.png"},
-    {"Moonlight\n(Local Mesa Debug)", "QT_SCALE_FACTOR=3 meson devenv -C /home/martijn/mesa/build /home/martijn/moonlight-qt/app/moonlight", "moonlight.png"},
-    {"Moonlight\n(Local Mesa Fast)", "QT_SCALE_FACTOR=3 meson devenv -C /home/martijn/mesa/build_rel /home/martijn/moonlight-qt/app/moonlight", "moonlight.png"},
-    {"Sway", "sway", "sway.svg"},
-    {"Shutdown", "sudo shutdown -P 0", "shutdown.png"},
-    {"Reboot", "sudo reboot", "reboot.png"},
-};
-*/
 
 // ===================================================================
 // Helper Struct for Rendering
@@ -58,6 +47,7 @@ struct MenuItem {
         SDL_Texture* text_texture = nullptr;
     };
     std::vector<Variant> variants;
+    int selected_variant = 0;
 
     // Destructor to automatically clean up textures
     ~MenuItem() {
@@ -76,6 +66,13 @@ struct MenuItem {
 int main(int argc, char* argv[]) {
     std::filesystem::current_path(std::filesystem::path(argv[0]).parent_path());
 
+    bool windowed = false;
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--windowed") == 0) {
+            windowed = true;
+        }
+    }
+
     // Load the config file.
     std::ifstream conf("apps.conf");
     std::string line;
@@ -84,6 +81,11 @@ int main(int argc, char* argv[]) {
         App app;
         std::getline(conf, app.name);
         std::getline(conf, app.icon_path);
+
+        if (conf.eof()) {
+            break;
+        }
+        std::cout << "Parse program '" << app.name << "' with icon: " << app.icon_path << std::endl;
         while (true) {
             std::getline(conf, line);
             if (line.empty() || conf.eof() || conf.bad()) {
@@ -95,7 +97,7 @@ int main(int argc, char* argv[]) {
                 App::Variant v;
                 v.variant_name = line;
                 std::getline(conf, v.command);
-                std::cout << "Parse variant '" << v.variant_name << "' with command: " << v.command << std::endl;
+                std::cout << "   Parse variant '" << v.variant_name << "' with command: " << v.command << std::endl;
                 app.variants.emplace_back(std::move(v));
             }
         }
@@ -106,12 +108,12 @@ int main(int argc, char* argv[]) {
     bool loop = true;
     while (loop) {
         // 1. Initialize SDL and its subsystems
-        if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD) < 0) {
+        if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
             std::cerr << "Error: Could not initialize SDL: " << SDL_GetError() << std::endl;
             return 1;
         }
 
-        if (TTF_Init() == -1) {
+        if (!TTF_Init()) {
             std::cerr << "Error: Could not initialize SDL_ttf: " << SDL_GetError() << std::endl;
             SDL_Quit();
             return 1;
@@ -125,18 +127,20 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
-        SDL_DisplayID display = SDL_GetDisplayForWindow(window);
-        int num_modes;
-        SDL_DisplayMode **modes = SDL_GetFullscreenDisplayModes(display, &num_modes);
-        for (int i = 0; i < num_modes; ++i) {
-            SDL_DisplayMode *m = modes[i];
-            std::cout << "Mode: " << m->w << "x" << m->h << "@" << m->refresh_rate << std::endl;
+        if (!windowed) {
+            SDL_DisplayID display = SDL_GetDisplayForWindow(window);
+            int num_modes;
+            SDL_DisplayMode **modes = SDL_GetFullscreenDisplayModes(display, &num_modes);
+            for (int i = 0; i < num_modes; ++i) {
+                SDL_DisplayMode *m = modes[i];
+                std::cout << "Mode: " << m->w << "x" << m->h << "@" << m->refresh_rate << std::endl;
+            }
+            if (num_modes > 0) {
+                SDL_SetWindowFullscreenMode(window, modes[0]);
+                SDL_SyncWindow(window);
+            }
+            SDL_HideCursor();
         }
-        if (num_modes > 0) {
-            SDL_SetWindowFullscreenMode(window, modes[0]);
-            SDL_SyncWindow(window);
-        }
-        SDL_HideCursor();
 
 
         SDL_Renderer* renderer = SDL_CreateRenderer(window, NULL);
@@ -153,15 +157,27 @@ int main(int argc, char* argv[]) {
         // 3. Load Font
         TTF_Font* font = nullptr;
         const std::vector<const char*> font_paths = {
+#if __APPLE__
+            "/System/Library/Fonts/Geneva.ttf",
+            "/System/Library/Fonts/NewYork.ttf"
+#else
             "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf",
             "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
             "/usr/share/fonts/liberation/LiberationSans-Regular.ttf",
             "/usr/share/fonts/corefonts/arial.ttf", // Common on some systems
             "/usr/share/fonts/TTF/DejaVuSans.ttf" // Fallback path
+#endif
         };
 
+        // --- Layout constants ---
+        const int ICON_BASE_SIZE = screen_h / 8;
+        const int ICON_SPACING = screen_h / 12;
+        const float SELECTED_SCALE = 1.3f;
+        const int TEXT_Y_OFFSET = screen_h / 30;
+        const int FONT_SIZE = screen_h / 40;
+
         for (const auto& path : font_paths) {
-            font = TTF_OpenFont(path, 48);
+            font = TTF_OpenFont(path, FONT_SIZE);
             if (font) {
                 std::cout << "Loaded font: " << path << std::endl;
                 break;
@@ -173,12 +189,6 @@ int main(int argc, char* argv[]) {
             // Cleanup...
             return 1;
         }
-
-        // --- Layout constants ---
-        const int ICON_BASE_SIZE = 256;
-        const int ICON_SPACING = 120;
-        const float SELECTED_SCALE = 1.3f;
-        const int TEXT_Y_OFFSET = 220;
 
         // 4. Load Resources (Icons and Text Textures)
         std::vector<std::unique_ptr<MenuItem>> menu_items;
@@ -214,9 +224,8 @@ int main(int argc, char* argv[]) {
             for (size_t vi = 0; vi < app.variants.size(); ++vi) {
                 const std::string &vname = app.variants[vi].variant_name;
                 MenuItem::Variant v;
-                SDL_Surface* text_surface = TTF_RenderText_Blended_Wrapped(
-                        font, vname.c_str(), vname.length(),
-                        text_color, int(ICON_BASE_SIZE * 1.2)
+                SDL_Surface* text_surface = TTF_RenderText_Blended(
+                        font, vname.c_str(), vname.length(), text_color
                 );
                 v.text_texture = SDL_CreateTextureFromSurface(renderer, text_surface);
                 v.text_width = text_surface->w;
@@ -249,7 +258,6 @@ int main(int argc, char* argv[]) {
         // 5. Main Loop
         bool running = true;
         int selected_app_index = 0;
-        int selected_app_variant = 0;
         bool selecting_variant = 0;
         SDL_Event event;
         float scroll_accum = 0.0f;
@@ -261,49 +269,67 @@ int main(int argc, char* argv[]) {
 
         SDL_SetWindowKeyboardGrab(window, true);
 
+        struct {
+            bool up;
+            bool down;
+            bool left;
+            bool right;
+            bool confirm;
+            bool cancel;
+        } controls;
+
         while (running) {
             // --- Event Handling ---
-            //SDL_WaitEvent(NULL);
+            std::memset(&controls, 0, sizeof(controls));
             SDL_PumpEvents();
             while (SDL_PollEvent(&event)) {
                 if (event.type == SDL_EVENT_QUIT) {
                     selected_app_index = -1;
+                    controls.cancel = true;
                     running = false;
                     loop = false;
                 }
                 if (event.type == SDL_EVENT_KEY_DOWN) {
                     switch (event.key.key) {
                         case SDLK_LEFT:
-                            selected_app_index = (selected_app_index - 1 + apps.size()) % apps.size();
+                        case SDLK_H:
+                            controls.left = true;
                             break;
                         case SDLK_RIGHT:
-                            selected_app_index = (selected_app_index + 1) % apps.size();
+                        case SDLK_L:
+                            controls.right = true;
+                            break;
+                        case SDLK_K:
+                        case SDLK_UP:
+                            controls.up = true;
+                            break;
+                        case SDLK_DOWN:
+                        case SDLK_J:
+                            controls.down = true;
                             break;
                         case SDLK_RETURN:
                         case SDLK_KP_ENTER:
-                            running = false;
+                            controls.confirm = true;
                             break;
                         case SDLK_ESCAPE:
-                            selected_app_index = -1; // Special value for escape
-                            running = false;
+                            controls.cancel = true;
                             break;
                     }
                 }
                 if (event.type == SDL_EVENT_MOUSE_WHEEL) {
                     scroll_accum += event.wheel.y;
                     if (scroll_accum < -0.5f) {
-                        selected_app_index = (selected_app_index - 1 + apps.size()) % apps.size();
+                        controls.left = true;
                         scroll_accum = 0.0f;
                     } else if (scroll_accum > 0.5f) {
-                        selected_app_index = (selected_app_index + 1) % apps.size();
+                        controls.right = true;
                         scroll_accum = 0.0f;
                     }
                 } else if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
                     if (event.button.button == SDL_BUTTON_LEFT) {
-                        running = false;
+                        controls.confirm = true;
                     } else if (event.button.button == SDL_BUTTON_RIGHT) {
-                        selected_app_index = -1;
-                        running = false;
+                        controls.cancel = true;
                         loop = false;
                     }
                 }
@@ -331,20 +357,39 @@ int main(int argc, char* argv[]) {
                     switch(event.gbutton.button) {
                         case SDL_GAMEPAD_BUTTON_DPAD_LEFT:
                         case SDL_GAMEPAD_BUTTON_LEFT_SHOULDER:
-                            selected_app_index = (selected_app_index - 1 + apps.size()) % apps.size();
+                            controls.left = true;
                             break;
                         case SDL_GAMEPAD_BUTTON_DPAD_RIGHT:
                         case SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER:
-                            selected_app_index = (selected_app_index + 1) % apps.size();
+                            controls.right = true;
                             break;
                         case SDL_GAMEPAD_BUTTON_SOUTH: // A button on Xbox/Switch Pro, X on PS
-                            running = false;
+                            controls.confirm = true;
                             break;
                         case SDL_GAMEPAD_BUTTON_EAST: // B button on Xbox, Circle on PS
-                            selected_app_index = -1;
-                            running = false;
+                            controls.cancel = true;
                             break;
                     }
+                }
+            }
+
+            if (controls.cancel) {
+                selected_app_index = -1; // Special value for escape
+                running = false;
+            } else if (controls.left) {
+                selected_app_index = (selected_app_index - 1 + apps.size()) % apps.size();
+            } else if (controls.right) {
+                selected_app_index = (selected_app_index + 1) % apps.size();
+            } else if (controls.confirm) {
+                running = false;
+            }
+            if (selected_app_index >= 0 && selected_app_index < menu_items.size()) {
+                auto &sv = menu_items[selected_app_index]->selected_variant;
+                int vc = menu_items[selected_app_index]->variants.size();
+                if (controls.up) {
+                    sv = (sv - 1 + vc) % vc;
+                } else if (controls.down) {
+                    sv = (sv + 1) % vc;
                 }
             }
 
@@ -356,6 +401,7 @@ int main(int argc, char* argv[]) {
 
             int current_x = start_x;
             for (int i = 0; i < menu_items.size(); ++i) {
+                MenuItem *mi = menu_items[i].get();
                 float scale = (i == selected_app_index) ? SELECTED_SCALE : 1.0f;
                 int icon_size = static_cast<int>(ICON_BASE_SIZE * scale);
 
@@ -369,27 +415,48 @@ int main(int argc, char* argv[]) {
 
                 // Dim non-selected items
                 Uint8 brightness = (i == selected_app_index) ? 255 : 150;
-                SDL_SetTextureColorMod(menu_items[i]->icon_texture, brightness, brightness, brightness);
-                SDL_SetTextureColorMod(menu_items[i]->text_texture, brightness, brightness, brightness);
+                SDL_SetTextureColorMod(mi->icon_texture, brightness, brightness, brightness);
+                SDL_SetTextureColorMod(mi->text_texture, brightness, brightness, brightness);
 
                 // Render Icon
-                if (menu_items[i]->icon_texture) {
-                    SDL_RenderTexture(renderer, menu_items[i]->icon_texture, NULL, &icon_rect);
+                if (mi->icon_texture) {
+                    SDL_RenderTexture(renderer, mi->icon_texture, NULL, &icon_rect);
                 }
 
                 // Render Text below the icon
-                if (menu_items[i]->text_texture) {
-                    float text_x = current_x + (ICON_BASE_SIZE / 2) - (menu_items[i]->text_width / 2);
+                if (mi->text_texture) {
+                    float text_x = current_x + (ICON_BASE_SIZE / 2) - (mi->text_width / 2);
                     SDL_FRect text_rect = {
                         text_x,
-                        static_cast<float>((screen_h / 2) + TEXT_Y_OFFSET),
-                        static_cast<float>(menu_items[i]->text_width),
-                        static_cast<float>(menu_items[i]->text_height)
+                        static_cast<float>((screen_h + ICON_BASE_SIZE) / 2 + TEXT_Y_OFFSET),
+                        static_cast<float>(mi->text_width),
+                        static_cast<float>(mi->text_height)
                     };
-                    SDL_RenderTexture(renderer, menu_items[i]->text_texture, NULL, &text_rect);
+                    SDL_RenderTexture(renderer, mi->text_texture, NULL, &text_rect);
                 }
 
                 current_x += ICON_BASE_SIZE + ICON_SPACING;
+            }
+
+            if (selected_app_index != -1) {
+                // Render variants name of the selected app
+                MenuItem *mi = menu_items[selected_app_index].get();
+                for (int vi = 0; vi < mi->variants.size(); ++vi) {
+                    auto &v = mi->variants[vi];
+                    if (v.text_texture) {
+                        float text_x = (screen_w - v.text_width) / 2;
+                        float y = screen_h * 3 / 4 + (vi - mi->selected_variant) * FONT_SIZE * 3 / 2;
+                        SDL_FRect text_rect = {
+                            text_x, y,
+                            static_cast<float>(v.text_width),
+                            static_cast<float>(v.text_height)
+                        };
+
+                        Uint8 brightness = (vi == mi->selected_variant) ? 255 : 150;
+                        SDL_SetTextureColorMod(v.text_texture, brightness, brightness, brightness);
+                        SDL_RenderTexture(renderer, v.text_texture, NULL, &text_rect);
+                    }
+                }
             }
 
             SDL_RenderPresent(renderer);
@@ -399,7 +466,8 @@ int main(int argc, char* argv[]) {
         std::string command_to_run = "";
         if (selected_app_index >= 0 && selected_app_index < apps.size()) {
             App &app = apps[selected_app_index];
-            command_to_run = app.variants[selected_app_variant].command;
+            MenuItem &mi = *menu_items[selected_app_index].get();
+            command_to_run = app.variants[mi.selected_variant].command;
         } else {
             loop = false;
         }

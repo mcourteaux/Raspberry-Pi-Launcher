@@ -363,6 +363,12 @@ int main(int argc, char* argv[]) {
                         case SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER:
                             controls.right = true;
                             break;
+                        case SDL_GAMEPAD_BUTTON_DPAD_DOWN:
+                            controls.down = true;
+                            break;
+                        case SDL_GAMEPAD_BUTTON_DPAD_UP:
+                            controls.up = true;
+                            break;
                         case SDL_GAMEPAD_BUTTON_SOUTH: // A button on Xbox/Switch Pro, X on PS
                             controls.confirm = true;
                             break;

@@ -12,6 +12,7 @@
 #include <memory>
 #include <filesystem>
 #include <unistd.h>
+#include <stdlib.h>
 
 
 // ===================================================================
@@ -27,8 +28,6 @@ struct App {
     std::vector<Variant> variants;
 };
 
-
-std::vector<App> apps;
 
 // ===================================================================
 // Helper Struct for Rendering
@@ -48,16 +47,6 @@ struct MenuItem {
     };
     std::vector<Variant> variants;
     int selected_variant = 0;
-
-    // Destructor to automatically clean up textures
-    ~MenuItem() {
-        if (icon_texture) {
-            SDL_DestroyTexture(icon_texture);
-        }
-        if (text_texture) {
-            SDL_DestroyTexture(text_texture);
-        }
-    }
 };
 
 // ===================================================================
@@ -73,37 +62,65 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // Load the config file.
-    std::ifstream conf("apps.conf");
-    std::string line;
-    apps.clear();
-    while (!conf.eof()) {
-        App app;
-        std::getline(conf, app.name);
-        std::getline(conf, app.icon_path);
-
-        if (conf.eof()) {
-            break;
-        }
-        std::cout << "Parse program '" << app.name << "' with icon: " << app.icon_path << std::endl;
-        while (true) {
-            std::getline(conf, line);
-            if (line.empty() || conf.eof() || conf.bad()) {
-                // Seperator, new app!
-                apps.emplace_back(std::move(app));
-                break;
-            } else {
-                // Variant name
-                App::Variant v;
-                v.variant_name = line;
-                std::getline(conf, v.command);
-                std::cout << "   Parse variant '" << v.variant_name << "' with command: " << v.command << std::endl;
-                app.variants.emplace_back(std::move(v));
+    // Load env.conf
+    {
+        std::ifstream conf("env.conf");
+        if (conf.is_open()) {
+            std::string line;
+            while (!conf.eof()) {
+                std::getline(conf, line);
+                if (line.empty() || conf.eof() || conf.bad()) {
+                    continue;
+                }
+                size_t pos = line.find("=");
+                std::string key = line.substr(0, pos);
+                std::string val = line.substr(pos + 1);
+                std::cout << "Set env var '" << key << "' to '" << val.c_str() << "'\n";
+                int ret = setenv(key.c_str(), val.c_str(), true);
+                if (ret) {
+                    std::cout << "  => failed: " << ret << std::endl;
+                }
             }
+        } else {
+            std::cout << "No env.conf file found.\n";
         }
     }
 
+    // Load the config file.
+    std::vector<App> apps;
+    {
+        std::ifstream conf("apps.conf");
+        if (!conf.is_open()) {
+            std::cout << "No apps.conf file found. This is necessary. Will exit.\n";
+            return 1;
+        }
+        std::string line;
+        while (!conf.eof()) {
+            App app;
+            std::getline(conf, app.name);
+            std::getline(conf, app.icon_path);
 
+            if (conf.eof()) {
+                break;
+            }
+            std::cout << "Parse program '" << app.name << "' with icon: " << app.icon_path << std::endl;
+            while (true) {
+                std::getline(conf, line);
+                if (line.empty() || conf.eof() || conf.bad()) {
+                    // Seperator, new app!
+                    apps.emplace_back(std::move(app));
+                    break;
+                } else {
+                    // Variant name
+                    App::Variant v;
+                    v.variant_name = line;
+                    std::getline(conf, v.command);
+                    std::cout << "   Parse variant '" << v.variant_name << "' with command: " << v.command << std::endl;
+                    app.variants.emplace_back(std::move(v));
+                }
+            }
+        }
+    }
 
     bool loop = true;
     while (loop) {
@@ -191,19 +208,20 @@ int main(int argc, char* argv[]) {
         }
 
         // 4. Load Resources (Icons and Text Textures)
-        std::vector<std::unique_ptr<MenuItem>> menu_items;
+        std::vector<MenuItem> menu_items;
+        menu_items.reserve(apps.size());
         SDL_Color text_color = {255, 255, 255, 255}; // White
         SDL_Texture *background = IMG_LoadTexture(renderer, "bg.png");
         SDL_SetTextureScaleMode(background, SDL_SCALEMODE_LINEAR);
         TTF_SetFontWrapAlignment(font, TTF_HORIZONTAL_ALIGN_CENTER);
 
         for (const auto& app : apps) {
-            auto item = std::make_unique<MenuItem>();
-            item->name = app.name;
+            MenuItem item;
+            item.name = app.name;
 
             // Load Icon
-            item->icon_texture = IMG_LoadTexture(renderer, app.icon_path.c_str());
-            if (!item->icon_texture) {
+            item.icon_texture = IMG_LoadTexture(renderer, app.icon_path.c_str());
+            if (!item.icon_texture) {
                 std::cerr << "Warning: Could not load icon " << app.icon_path << ": " << SDL_GetError() << std::endl;
             }
 
@@ -213,9 +231,9 @@ int main(int argc, char* argv[]) {
                     text_color, int(ICON_BASE_SIZE * 1.2)
             );
             if (text_surface) {
-                item->text_texture = SDL_CreateTextureFromSurface(renderer, text_surface);
-                item->text_width = text_surface->w;
-                item->text_height = text_surface->h;
+                item.text_texture = SDL_CreateTextureFromSurface(renderer, text_surface);
+                item.text_width = text_surface->w;
+                item.text_height = text_surface->h;
                 SDL_DestroySurface(text_surface);
             } else {
                  std::cerr << "Warning: Could not render text for " << app.name << ": " << SDL_GetError() << std::endl;
@@ -230,7 +248,7 @@ int main(int argc, char* argv[]) {
                 v.text_texture = SDL_CreateTextureFromSurface(renderer, text_surface);
                 v.text_width = text_surface->w;
                 v.text_height = text_surface->h;
-                item->variants.push_back(v);
+                item.variants.push_back(v);
             }
 
             menu_items.push_back(std::move(item));
@@ -390,8 +408,8 @@ int main(int argc, char* argv[]) {
                 running = false;
             }
             if (selected_app_index >= 0 && selected_app_index < menu_items.size()) {
-                auto &sv = menu_items[selected_app_index]->selected_variant;
-                int vc = menu_items[selected_app_index]->variants.size();
+                auto &sv = menu_items[selected_app_index].selected_variant;
+                int vc = menu_items[selected_app_index].variants.size();
                 if (controls.up) {
                     sv = (sv - 1 + vc) % vc;
                 } else if (controls.down) {
@@ -407,7 +425,7 @@ int main(int argc, char* argv[]) {
 
             int current_x = start_x;
             for (int i = 0; i < menu_items.size(); ++i) {
-                MenuItem *mi = menu_items[i].get();
+                MenuItem &mi = menu_items[i];
                 float scale = (i == selected_app_index) ? SELECTED_SCALE : 1.0f;
                 int icon_size = static_cast<int>(ICON_BASE_SIZE * scale);
 
@@ -421,24 +439,24 @@ int main(int argc, char* argv[]) {
 
                 // Dim non-selected items
                 Uint8 brightness = (i == selected_app_index) ? 255 : 150;
-                SDL_SetTextureColorMod(mi->icon_texture, brightness, brightness, brightness);
-                SDL_SetTextureColorMod(mi->text_texture, brightness, brightness, brightness);
+                SDL_SetTextureColorMod(mi.icon_texture, brightness, brightness, brightness);
+                SDL_SetTextureColorMod(mi.text_texture, brightness, brightness, brightness);
 
                 // Render Icon
-                if (mi->icon_texture) {
-                    SDL_RenderTexture(renderer, mi->icon_texture, NULL, &icon_rect);
+                if (mi.icon_texture) {
+                    SDL_RenderTexture(renderer, mi.icon_texture, NULL, &icon_rect);
                 }
 
                 // Render Text below the icon
-                if (mi->text_texture) {
-                    float text_x = current_x + (ICON_BASE_SIZE / 2) - (mi->text_width / 2);
+                if (mi.text_texture) {
+                    float text_x = current_x + (ICON_BASE_SIZE / 2) - (mi.text_width / 2);
                     SDL_FRect text_rect = {
                         text_x,
                         static_cast<float>((screen_h + ICON_BASE_SIZE) / 2 + TEXT_Y_OFFSET),
-                        static_cast<float>(mi->text_width),
-                        static_cast<float>(mi->text_height)
+                        static_cast<float>(mi.text_width),
+                        static_cast<float>(mi.text_height)
                     };
-                    SDL_RenderTexture(renderer, mi->text_texture, NULL, &text_rect);
+                    SDL_RenderTexture(renderer, mi.text_texture, NULL, &text_rect);
                 }
 
                 current_x += ICON_BASE_SIZE + ICON_SPACING;
@@ -446,19 +464,19 @@ int main(int argc, char* argv[]) {
 
             if (selected_app_index != -1) {
                 // Render variants name of the selected app
-                MenuItem *mi = menu_items[selected_app_index].get();
-                for (int vi = 0; vi < mi->variants.size(); ++vi) {
-                    auto &v = mi->variants[vi];
+                MenuItem &mi = menu_items[selected_app_index];
+                for (int vi = 0; vi < mi.variants.size(); ++vi) {
+                    auto &v = mi.variants[vi];
                     if (v.text_texture) {
                         float text_x = (screen_w - v.text_width) / 2;
-                        float y = screen_h * 3 / 4 + (vi - mi->selected_variant) * FONT_SIZE * 3 / 2;
+                        float y = screen_h * 3 / 4 + (vi - mi.selected_variant) * FONT_SIZE * 3 / 2;
                         SDL_FRect text_rect = {
                             text_x, y,
                             static_cast<float>(v.text_width),
                             static_cast<float>(v.text_height)
                         };
 
-                        Uint8 brightness = (vi == mi->selected_variant) ? 255 : 150;
+                        Uint8 brightness = (vi == mi.selected_variant) ? 255 : 150;
                         SDL_SetTextureColorMod(v.text_texture, brightness, brightness, brightness);
                         SDL_RenderTexture(renderer, v.text_texture, NULL, &text_rect);
                     }
@@ -472,7 +490,7 @@ int main(int argc, char* argv[]) {
         std::string command_to_run = "";
         if (selected_app_index >= 0 && selected_app_index < apps.size()) {
             App &app = apps[selected_app_index];
-            MenuItem &mi = *menu_items[selected_app_index].get();
+            MenuItem &mi = menu_items[selected_app_index];
             command_to_run = app.variants[mi.selected_variant].command;
         } else {
             loop = false;
@@ -485,7 +503,16 @@ int main(int argc, char* argv[]) {
         gamepads.clear();
 
 
-        menu_items.clear(); // This will trigger destructors and free textures
+        for (int i = 0; i < menu_items.size(); ++i) {
+            MenuItem &mi = menu_items[i];
+            SDL_DestroyTexture(mi.icon_texture);
+            SDL_DestroyTexture(mi.text_texture);
+            for (int vi = 0; vi < mi.variants.size(); ++vi) {
+                auto &v = mi.variants[vi];
+                SDL_DestroyTexture(v.text_texture);
+            }
+        }
+        menu_items.clear();
         TTF_CloseFont(font);
         SDL_DestroyRenderer(renderer);
         SDL_DestroyWindow(window);
